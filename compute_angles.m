@@ -9,10 +9,10 @@ function angles = compute_angles(P1, P2)
     % 提取坐标差分量
     delta_x = delta(1);
     delta_y = delta(2);
-    delta_z = -delta(3);
+    delta_z = delta(3);
 
     % 计算方位角（azimuth）
-    azimuth = atan2d(delta_x, delta_y);
+    azimuth = atan2d(delta_y, delta_x);
 
     % 计算俯仰角（elevation），单位为度
     elevation = atan2d(delta_z, sqrt(delta_x^2 + delta_y^2));

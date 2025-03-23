@@ -22,16 +22,35 @@ max_range = c/2*wave.pri;
 t = (0:wave.pri*fs-1)/fs;
 
 %% 发射阵列
-Trans.N = 1;
-Trans.M = 1;
-Trans.Pt = 50e3;
-Trans.Gt_db = 20;
+Trans.M = 16;
+Trans.N = 16;
+Trans.Pt = 5e3;
+Trans.Gt_db = 0;
+Trans.d = wave.lambda/2;
 Trans.Gt = 10^(Trans.Gt_db/10);
+Trans.angle = [[49.9;-26],[29;-25],[10;-24],[39;-23]];
+% Trans.angle = [60;-50];
+Trans.w = zeros(Trans.M*Trans.N,1);
+
+for i = 1:size(Trans.angle,2)
+    Trans.w = Trans.w + array_space(Trans.M,Trans.N,Trans.d,wave.lambda,Trans.angle(1,i),Trans.angle(2,i));
+end
+Trans.w = conj(Trans.w)/size(Trans.angle,2);
+
+% ant_grid_n = 181;
+% angel_grid = linspace(-90,90,ant_grid_n);
+% ant_gra = zeros(ant_grid_n,ant_grid_n);
+% for i = 1:ant_grid_n
+%     for j = 1:ant_grid_n
+%         ant_gra(i,j) = abs(Trans.w.'*array_space(Trans.M,Trans.N,Trans.d,wave.lambda,angel_grid(i),angel_grid(j)));
+%     end
+% end
+% mesh(angel_grid,angel_grid,ant_gra);
 
 %% 接收阵列
-Rece.N = 1;
-Rece.M = 1;
-Rece.d = wave.lambda/2;
+Rece.M = Trans.M;
+Rece.N = Trans.N;
+Rece.d = Trans.d;
 Rece.Gr = Trans.Gt;
 
 %% 噪声
@@ -43,7 +62,7 @@ noise.w = 10^((noise.dbm-30)/10);
 %% 目标回波 列表示第几个目标
 tgt.pos = [[1262.9,1505,10].',[1797.9,1038,10].',[2153.1,379.6,10].',[1758.6,1475.6,10].'];
 tgt.v = [[0,-20,0].',[0,-20,0].',[0,-20,0].',[0,-20,0].'];
-tgt.rcs = [1,1,1,1];
+tgt.rcs = [0.01,0.01,0.01,0.01];
 tgt.num = length(tgt.pos);
 
 for i = 1:tgt.num
@@ -51,7 +70,12 @@ for i = 1:tgt.num
 end
 
 for i = 1:tgt.num
-    tgt.amp(i) = sqrt(Trans.Pt*Trans.Gt*Rece.Gr*wave.lambda^2*tgt.rcs(i)/((4*pi)^3*tgt.dis(i)^4));
+    tgt.angle(:,i) = compute_angles(plat.position, tgt.pos(:,i));
+end
+
+for i = 1:tgt.num
+    tgt.amp(i) = sqrt(Trans.Pt*Trans.Gt*Rece.Gr*wave.lambda^2*tgt.rcs(i)/((4*pi)^3*tgt.dis(i)^4))*...
+        Trans.w.'*array_space(Trans.M,Trans.N,Trans.d,wave.lambda,tgt.angle(1,i),tgt.angle(2,i));
 end
 
 for i = 1:tgt.num
@@ -59,105 +83,32 @@ for i = 1:tgt.num
 end
 
 for i = 1:tgt.num
-    tgt.angle(:,i) = compute_angles(plat.position, tgt.pos(:,i));
+    tgt.vd(i) = (tgt.v(:,i) - plat.v).'*(tgt.pos(:,i)-plat.position)/norm(tgt.pos(:,i)-plat.position);
+    tgt.fd(i) = -2/wave.lambda*tgt.vd(i);
 end
 
 for i = 1:tgt.num
-    tgt.fu(:,i) = Rece.d/wave.lambda*cosd(tgt.angle(1,i))*cosd(tgt.angle(2,i));
+    tgt.fu_z(:,i) = Rece.d/wave.lambda*sind(tgt.angle(2,i));
+    tgt.fu_y(:,i) = Rece.d/wave.lambda*cosd(tgt.angle(2,i))*sind(tgt.angle(1,i));
 end
 
-for i = 1:tgt.num
-    tgt.fd(i) = 2/wave.lambda*(plat.v - tgt.v(:,i)).'*(tgt.pos(:,i)-plat.position)/norm(tgt.pos(:,i)-plat.position);
-end
-
-% 生成目标回波信号 
+% % 生成目标回波信号 
 tgt.data = zeros(Rece.N*Rece.M*wave.K,wave.pri*fs);
 for i = 1:tgt.num
-        tgt.a_u = exp(-1j*2*pi*(0:Rece.N-1)*tgt.fu(i)).';
+        tgt.a_u = kron(exp(-1j*2*pi*(0:Rece.N-1)*tgt.fu_y(i)).',exp(1j*2*pi*(0:Rece.M-1)*tgt.fu_z(i)).');
         tgt.a_d = exp(-1j*2*pi*(0:wave.K-1)*tgt.fd(i)*wave.pri).';
         tgt.a_st = kron(tgt.a_u,tgt.a_d);
         tgt.data = tgt.data + tgt.a_st*tgt.amp(i)*rectpuls((t-tgt.tao0(i))/wave.prt,1).*...
             exp(1j*pi*wave.mu*(t-tgt.tao0(i)).^2).*exp(1j*2*pi*tgt.fd(i)*t);
 end
 
-%% 杂波
-% range_resolution = c/2/wave.B;
-% degree_resolution = 3;
-% clutter.start = 0;
-% clutter.end = sqrt(max_range^2-plat.position(3)^2);
-% clutter.sigma0_dbm = -20;
-% clutter.sigma0 = 10^(clutter.sigma0_dbm/10);
-% clutter.dis_num = floor((clutter.end - clutter.start)/range_resolution);
-% clutter.deg_num = 180/degree_resolution;
-% clutter.center_pos = zeros(clutter.deg_num,clutter.dis_num,3);
-% clutter.center_dis = zeros(clutter.deg_num,clutter.dis_num);
-% clutter.center_theta = zeros(clutter.deg_num,clutter.dis_num);
-% clutter.center_phi = zeros(clutter.deg_num,clutter.dis_num);
-% clutter.center_size = zeros(clutter.deg_num,clutter.dis_num);
-% clutter.rcs = zeros(clutter.deg_num,clutter.dis_num);
-% clutter.Kr = zeros(clutter.deg_num,clutter.dis_num);
-% clutter.fu = zeros(clutter.deg_num,clutter.dis_num);
-% clutter.fd = zeros(clutter.deg_num,clutter.dis_num);
-% clutter.tao0 = zeros(clutter.deg_num,clutter.dis_num);
-% clutter.data = zeros(Rece.N*Rece.M*wave.K,wave.pri*fs);
-% 
-% for i = 1:clutter.deg_num
-%     for j = 1:clutter.dis_num
-%         clutter.center_pos(i,j,1) = range_resolution*(j-0.5)*sind(-90+(i-0.5)*degree_resolution); 
-%         clutter.center_pos(i,j,2) = range_resolution*(j-0.5)*cosd(-90+(i-0.5)*degree_resolution); 
-%     end
-% end
-% 
-% for i = 1:clutter.deg_num
-%     for j = 1:clutter.dis_num
-%         clutter.center_dis(i,j) = norm(plat.position-squeeze(clutter.center_pos(i,j,:)));
-%     end
-% end
-% clutter.center_theta = repmat((((1:clutter.deg_num)-0.5)*degree_resolution - 90).',1,clutter.dis_num);
-% 
-% for j = 1:clutter.dis_num
-%     clutter.center_phi(1,j) = atan2d(norm(plat.position(3)-squeeze(clutter.center_pos(1,j,3)))...
-%         ,norm(plat.position(1:2)-squeeze(clutter.center_pos(1,j,1:2))));
-% end
-% clutter.center_phi = repmat(clutter.center_phi(1,:),clutter.deg_num,1);
-% 
-% for i = 1:clutter.dis_num
-%     clutter.center_size(1,i) = degree_resolution/360*(pi*(i*range_resolution)^2-pi*((i-1)*range_resolution)^2);
-% end
-% clutter.center_size = repmat(clutter.center_size(1,:),clutter.deg_num,1);
-% 
-% clutter.rcs = clutter.sigma0*clutter.center_size;
-% 
-% for i = 1:clutter.dis_num
-%     clutter.Kr(1,i) = sqrt(Trans.Pt*Trans.Gt*Rece.Gr*wave.lambda^2*clutter.rcs(1,i)...
-%         /((4*pi)^3*clutter.center_dis(1,i)^4));
-% end
-% clutter.Kr = repmat(clutter.Kr(1,:),clutter.deg_num,1);
-% 
-% clutter.fu = Rece.d/wave.lambda*cosd(clutter.center_theta).*cosd(clutter.center_phi);
-% 
-% clutter.fd = 2*plat.v(2)/wave.lambda*cosd(clutter.center_theta).*cosd(clutter.center_phi);
-% 
-% for i = 1:clutter.dis_num
-%     clutter.tao0(1,i) = 2*clutter.center_dis(1,i)/c;
-% end
-% clutter.tao0 = repmat(clutter.tao0(1,:),clutter.deg_num,1);
-% 
-% % 生成杂波
-% for i = 1:clutter.deg_num
-%     for j = 1:clutter.dis_num
-%         a_u = exp(-1j*2*pi*(0:Rece.N-1)*clutter.fu(i,j)).';
-%         a_d = exp(-1j*2*pi*(0:wave.K-1)*clutter.fd(i,j)*wave.pri).';
-%         a_st = kron(a_u,a_d);
-%         clutter.data = clutter.data + a_st*clutter.Kr(i,j)*rectpuls((t-clutter.tao0(i,j))/wave.prt,1).*...
-%             exp(1j*pi*wave.mu*(t-clutter.tao0(i,j)).^2).*exp(1j*2*pi*clutter.fd(i,j)*t);
-%     end
-% end
-
 %% 回波合成
+rng(150);
 echo.data = sqrt(noise.w)*(randn(size(tgt.data)) + 1j*randn(size(tgt.data))); % 噪声
-% echo.real_noise_power = 1/size(echo.data,2)/2*sum(diag(echo.data*echo.data'))/size(echo.data,1);
 echo.data = echo.data + tgt.data;
+echo.dis_gate = (0:size(echo.data,2)-1)*c/2/fs;
+echo.v_gate = (-wave.K/2:wave.K/2-1)*wave.lambda/2/wave.K*wave.prf;
+% echo.v_gate = linspace(-wave.prf/2,wave.prf/2,wave.K);
 % plot(real(echo.data(1,:)));
 
 %% 脉冲压缩
@@ -175,17 +126,63 @@ for i = 1:size(pc.out,1)
 end
 pc.out = ifft(pc.out,pc.nfft,2);
 pc.out = pc.out(:,pc.delay+1:pc.delay+pc.pri_num);
-% plot((0:length(pc.out)-1)*c/2/fs,abs(pc.out(1,:)));
+% plot(echo.dis_gate,abs(pc.out(1,:)));
+
+%% 波束形成
+beamform.angle(1) = Trans.angle(1,1);
+beamform.angle(2) = Trans.angle(2,1);
+beamform.w = conj(array_space(Trans.M,Trans.N,Trans.d,wave.lambda,beamform.angle(1),beamform.angle(2)));
+for i = 1:wave.K
+    bufer_one = pc.out(i:wave.K:end,:);
+    beamform.out(i,:) = beamform.w.'*bufer_one;
+end
+% plot(real(beamform.out(1,:)));
 
 %% MTD
-% mesh(10*log10(abs(ifftshift(fft(bsxfun(@times, pc.out, hanning(32))),1))));
-mtd.out = ifftshift(fft(bsxfun(@times, pc.out, hanning(wave.K))),1);
-% mesh(10*log10((abs(mtd.out).^2)));
+mtd.out = ifftshift(fft(bsxfun(@times, beamform.out, hanning(wave.K))),1);
+% mesh(echo.dis_gate,echo.v_gate,10*log10((abs(mtd.out).^2)));
 % histogram(abs(mtd.out(1,:)).^2);
 
 %% CFAR
 [cfar_out,cfar_ref] = cfar_ca(mtd.out,1e-6,20,3);
-mesh(cfar_out);
+% mesh(echo.dis_gate,echo.v_gate,cfar_out);
 % plot(abs(mtd.out(8,:).^2));
 % hold on;
 % plot(cfar_ref(8,:));
+
+
+%% 聚类
+cluster_tgt.index = find(any(cfar_out));
+cluster_tgt.num = length(cluster_tgt.index);
+cluster_tgt.num_line = ones(length(cluster_tgt.index),1); % 每个距离单元目标数量
+
+%% doa
+doa.angle = zeros(2,cluster_tgt.num);
+
+for i = 1:cluster_tgt.num
+    doa.input = reshape(pc.out(:,cluster_tgt.index(i)),wave.K,Trans.M*Trans.N).';
+    doa.rx = 1/wave.K*(doa.input*doa.input');
+    [doa.eig_vec,doa.eig_val_d] = eig(doa.rx);
+    doa.eig_val = diag(doa.eig_val_d);
+    [doa.eig_val,doa.sort_index] = sort(doa.eig_val); %特征值从小到大排序
+    doa.eig_vec = doa.eig_vec(:,doa.sort_index);
+    doa.ns = doa.eig_vec(:,1:end-cluster_tgt.num_line(i)); %生成噪声空间
+    % 谱搜索
+    doa.grid_n = 181;
+    doa.grid = linspace(-90,90,doa.grid_n); %搜索间隔
+    doa.music = zeros(doa.grid_n,doa.grid_n);
+    for j = 1:doa.grid_n
+        for k = 1:doa.grid_n
+            doa.a_s = array_space(Trans.M,Trans.N,Trans.d,wave.lambda,doa.grid(j),doa.grid(k));
+            doa.music(j,k) = 1/((doa.ns'*doa.a_s)'*(doa.ns'*doa.a_s));
+        end
+    end
+    % mesh(doa.grid,doa.grid,doa.music);
+    [doa.max_row,doa.max_col] = find(doa.music == max(max(doa.music)));
+    doa.angle(1,i) = doa.grid(doa.max_row);
+    doa.angle(2,i) = doa.grid(doa.max_col);
+end
+
+%% 关联数据
+dect_tgt.dis = echo.dis_gate(cluster_tgt.index)
+dect_tgt.angel = doa.angle
